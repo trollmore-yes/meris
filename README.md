@@ -51,8 +51,23 @@ See `.env.example` for full examples.
 - `ANNOUNCEMENT_CHANNEL_ID` (optional fallback for servers without explicit per-server setup)
 - `CHECK_INTERVAL_MINUTES` (optional, default `10`)
 - `ANNOUNCE_ON_FIRST_RUN` (optional, default `false`)
+- `MERIS_DATA_DIR` (optional, directory for `state.json` and `guild_config.json`)
 - `ROYALROAD_FEEDS_JSON` (required for RoyalRoad monitoring)
 - `PATREON_FEEDS_JSON` (used for Patreon page monitoring and `/reannounce_last_update`)
+
+### Data directory behavior
+
+- Default data directory is `<project-root>/data`.
+- If `MERIS_DATA_DIR` is set, state/config files are loaded from that directory.
+- Relative `MERIS_DATA_DIR` values are resolved from the project root.
+
+This is useful for production service layouts, for example:
+
+- App code and venv: `/opt/meris`
+- Env file: `/etc/meris/bot.env`
+- Persistent state: `/var/lib/meris`
+
+Set `MERIS_DATA_DIR=/var/lib/meris` in your service environment.
 
 ### Feed JSON format
 
@@ -62,8 +77,7 @@ See `.env.example` for full examples.
 [
   {
     "name": "Readable feed label",
-    "url": "https://example.com/rss/feed",
-    "roleIds": ["123456789012345678", "234567890123456789"]
+    "url": "https://example.com/rss/feed"
   }
 ]
 ```

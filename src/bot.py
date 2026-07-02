@@ -470,9 +470,24 @@ ALL_SOURCES_FOR_COMMANDS = [*ROYALROAD_SOURCES, *PATREON_SOURCES]
 if not ALL_SOURCES:
     logger.warning("No feed sources configured. The bot will run but find no updates.")
 
-STATE_PATH = Path("data/state.json")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _resolve_data_dir() -> Path:
+    raw = os.getenv("MERIS_DATA_DIR", "").strip()
+    if not raw:
+        return PROJECT_ROOT / "data"
+
+    configured = Path(raw).expanduser()
+    if configured.is_absolute():
+        return configured
+    return (PROJECT_ROOT / configured).resolve()
+
+
+DATA_DIR = _resolve_data_dir()
+STATE_PATH = DATA_DIR / "state.json"
 STATE = _load_state(STATE_PATH)
-GUILD_CONFIG_PATH = Path("data/guild_config.json")
+GUILD_CONFIG_PATH = DATA_DIR / "guild_config.json"
 GUILD_CONFIG = _load_guild_config(GUILD_CONFIG_PATH)
 
 CHECK_LOCK = asyncio.Lock()

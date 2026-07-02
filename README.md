@@ -4,7 +4,7 @@ A Discord bot that monitors RoyalRoad RSS feeds and posts new update links to an
 
 ## Features
 
-- Monitors RoyalRoad via RSS
+- Monitors RoyalRoad and Patreon
 - Per-feed role ping mapping from `.env`
 - Automatic periodic checks while the bot is running
 - Slash command `/check_updates` to force an immediate RoyalRoad check
@@ -53,7 +53,7 @@ See `.env.example` for full examples.
 - `ANNOUNCE_ON_FIRST_RUN` (optional, default `false`)
 - `MERIS_DATA_DIR` (optional, directory for `state.json` and `guild_config.json`)
 - `ROYALROAD_FEEDS_JSON` (required for RoyalRoad monitoring)
-- `PATREON_FEEDS_JSON` (used for Patreon page monitoring and `/reannounce_last_update`)
+- `PATREON_FEEDS_JSON` (used for Patreon monitoring and `/reannounce_last_update`)
 
 ### Data directory behavior
 
@@ -84,10 +84,14 @@ Set `MERIS_DATA_DIR=/var/lib/meris` in your service environment.
 
 - `name`: Label shown in announcements
 - `url`: RSS URL for that source
-- `roleIds`: Discord role IDs to ping when that source updates
 
-For Patreon entries, set `url` to the public creator/page URL you want monitored. The bot checks that creator's sitemap for the newest public post link instead of using RSS.
-It supports both `https://www.patreon.com/c/<creator>` and `https://www.patreon.com/<creator>` URL formats.
+For Patreon entries, use the creator page URL:
+- `https://www.patreon.com/c/<creator>` or `https://www.patreon.com/<creator>`
+- Without API credentials, only **public posts** are detected.
+- To detect **member-only posts**, set `PATREON_CLIENT_ID` and `PATREON_CLIENT_SECRET`:
+  1. Go to https://www.patreon.com/portal/registration/register-clients
+  2. Create a client with `campaigns` and `posts` scopes
+  3. Add the credentials to your `.env` file
 
 ## Behavior Notes
 
@@ -111,8 +115,6 @@ It supports both `https://www.patreon.com/c/<creator>` and `https://www.patreon.
 - `/set_story_roles`
   - Field `platform`: `royalroad` or `patreon`.
   - Field `story`: autocomplete list generated from configured feed source names.
-  - Field `role_ids`: comma-separated role IDs for this server only.
-  - Leave `role_ids` empty to clear override and use default role IDs from feed config.
 - `/debug_latest_update`
   - Field `platform`: `royalroad` or `patreon`.
   - Field `story`: autocomplete list generated from configured feed source names.

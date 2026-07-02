@@ -4,12 +4,9 @@ import logging
 import os
 from dataclasses import dataclass
 from hashlib import sha256
-from html import unescape
-from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
-from urllib.error import HTTPError, URLError
-from urllib.parse import urlsplit, urlunsplit
+from urllib.parse import urlsplit
 from urllib.request import Request, urlopen
 
 import discord
@@ -39,122 +36,123 @@ class FeedSource:
         return f"{self.platform}:{self.name}:{digest}"
 
 
-class _PatreonLinkParser(HTMLParser):
-    def __init__(self) -> None:
-        super().__init__()
-        self.links: list[dict[str, str]] = []
-        self._current_href: str | None = None
-        self._current_text: list[str] = []
-        self._current_meta: dict[str, str] = {}
-
-    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
-        attr_map = {key: value or "" for key, value in attrs}
-
-        if tag == "a":
-            href = attr_map.get("href", "").strip()
-            if "/posts/" in href:
-                self._current_href = href
-                self._current_text = []
-        elif tag == "meta":
-            property_name = attr_map.get("property", "") or attr_map.get("name", "")
-            content = attr_map.get("content", "")
-            if property_name and content:
-                self._current_meta[property_name.lower()] = content.strip()
-
-    def handle_data(self, data: str) -> None:
-        if self._current_href is not None:
-            text = data.strip()
-            if text:
-                self._current_text.append(text)
-
-    def handle_endtag(self, tag: str) -> None:
-        if tag == "a" and self._current_href is not None:
-            title = unescape(" ".join(self._current_text).strip())
-            href = self._current_href.strip()
-            if href:
-                self.links.append({"href": href, "title": title})
-            self._current_href = None
-            self._current_text = []
-
-    @property
-    def page_title(self) -> str:
-        return (
-            self._current_meta.get("og:title")
-            or self._current_meta.get("twitter:title")
-            or self._current_meta.get("title")
-            or "New update"
-        )
-
 
 def _normalize_url(url: str) -> str:
     return url.strip()
 
-
-def _patreon_sitemap_url(url: str) -> str:
-    normalized = _normalize_url(url)
-    parsed = urlsplit(normalized)
-
-    path_parts = [part for part in parsed.path.split("/") if part]
-    if path_parts and path_parts[-1] == "sitemap":
-        return normalized.rstrip("/")
-
-    creator_slug = ""
-    if len(path_parts) >= 2 and path_parts[0] == "c":
-        creator_slug = path_parts[1]
-    elif path_parts:
-        creator_slug = path_parts[0]
-
-    if creator_slug:
-        sitemap_path = f"/{creator_slug}/sitemap"
-    else:
-        sitemap_path = "/sitemap"
-
-    return urlunsplit((parsed.scheme, parsed.netloc, sitemap_path, "", ""))
 
 
 def _is_patreon_platform(source: FeedSource) -> bool:
     return source.platform.strip().lower() == "patreon"
 
 
-def _patreon_request(url: str) -> str:
-    request = Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/126.0 Safari/537.36"
-            ),
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
+def _is_patreon_rss_url(url: str) -> bool:
+    normalized = _normalize_url(url).lower()
+    return "patreon.com/rss/" in normalized
 
+
+def _patreon_api_get(url: str, headers: dict[str, str] | None = None) -> Any:
+    req_headers = {"User-Agent": "Mozilla/5.0"}
+    if headers:
+        req_headers.update(headers)
+    request = Request(url, headers=req_headers)
     with urlopen(request, timeout=20) as response:
-        charset = response.headers.get_content_charset() or "utf-8"
-        body = response.read().decode(charset, errors="replace")
-    return body
+        return json.loads(response.read().decode("utf-8"))
 
 
-def _patreon_latest_from_html(html: str) -> dict[str, str] | None:
-    parser = _PatreonLinkParser()
-    parser.feed(html)
-
-    if not parser.links:
+def _patreon_extract_slug(url: str) -> str | None:
+    parsed = urlsplit(_normalize_url(url))
+    parts = [p for p in parsed.path.split("/") if p]
+    if not parts:
         return None
 
-    first_link = parser.links[0]
-    href = first_link.get("href", "").strip()
-    if not href:
+    if parts[0] == "c" and len(parts) >= 2:
+        return parts[1]
+    return parts[0]
+
+
+def _patreon_search_campaign(slug: str) -> str | None:
+    search_url = f"https://www.patreon.com/api/search?q={slug}"
+    data = _patreon_api_get(search_url)
+    for item in data.get("data", []):
+        item_id: str = item.get("id", "")
+        attrs = item.get("attributes", {})
+        item_url: str = attrs.get("url", "")
+        if item_id.startswith("campaign_") and slug in item_url:
+            return item_id.removeprefix("campaign_")
+    return None
+
+
+_PATREON_ACCESS_TOKEN: str | None = os.getenv("PATREON_ACCESS_TOKEN", "").strip() or None
+_PATREON_REFRESH_TOKEN: str | None = os.getenv("PATREON_REFRESH_TOKEN", "").strip() or None
+_PATREON_CLIENT_ID: str | None = os.getenv("PATREON_CLIENT_ID", "").strip() or None
+_PATREON_CLIENT_SECRET: str | None = os.getenv("PATREON_CLIENT_SECRET", "").strip() or None
+
+
+def _patreon_ensure_token() -> str | None:
+    global _PATREON_ACCESS_TOKEN
+    if _PATREON_ACCESS_TOKEN:
+        return _PATREON_ACCESS_TOKEN
+    if not (_PATREON_CLIENT_ID and _PATREON_CLIENT_SECRET and _PATREON_REFRESH_TOKEN):
+        return None
+    try:
+        body = (
+            f"grant_type=refresh_token"
+            f"&refresh_token={_PATREON_REFRESH_TOKEN}"
+            f"&client_id={_PATREON_CLIENT_ID}"
+            f"&client_secret={_PATREON_CLIENT_SECRET}"
+        )
+        request = Request(
+            "https://www.patreon.com/api/oauth2/token",
+            data=body.encode(),
+            headers={
+                "User-Agent": "Mozilla/5.0",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        with urlopen(request, timeout=20) as response:
+            token_data = json.loads(response.read().decode("utf-8"))
+        _PATREON_ACCESS_TOKEN = token_data.get("access_token")
+        if _PATREON_ACCESS_TOKEN:
+            logger.info("Obtained Patreon OAuth access token")
+        return _PATREON_ACCESS_TOKEN
+    except Exception as exc:
+        logger.warning("Failed to obtain Patreon access token: %s", exc)
         return None
 
-    if href.startswith("/"):
-        href = f"https://www.patreon.com{href}"
 
-    title = first_link.get("title", "").strip() or parser.page_title or "New update"
-    return {
-        "id": href,
-        "link": href,
-        "title": title,
-    }
+def _patreon_api_latest_post(campaign_id: str) -> dict[str, str] | None:
+    token = _patreon_ensure_token()
+    if token:
+        url = (
+            f"https://www.patreon.com/api/oauth2/v2/campaigns/{campaign_id}/posts"
+            f"?fields%5Bpost%5D=title,url,is_public&page%5Bcount%5D=200"
+        )
+        data = _patreon_api_get(url, {"Authorization": f"Bearer {token}"})
+    else:
+        logger.info(
+            "Set PATREON_ACCESS_TOKEN for member-only post detection. "
+            "Only public posts will be visible without it."
+        )
+        url = f"https://www.patreon.com/api/campaigns/{campaign_id}/posts"
+        data = _patreon_api_get(url)
+
+    posts = data.get("data", [])
+    if not posts:
+        return None
+
+    post = posts[-1]
+    attrs = post.get("attributes", {})
+    post_url: str = attrs.get("url", "").strip()
+    title: str = attrs.get("title", "").strip() or "New update"
+
+    if not post_url:
+        return None
+
+    if post_url.startswith("/"):
+        post_url = f"https://www.patreon.com{post_url}"
+
+    return {"id": post_url, "link": post_url, "title": title}
 
 
 def _required_env(name: str) -> str:
@@ -366,15 +364,49 @@ def _guild_role_ids_for_source(guild_id: int, source: FeedSource) -> list[int]:
 
 async def _fetch_latest_entry(source: FeedSource) -> dict[str, str] | None:
     if _is_patreon_platform(source):
-        try:
-            html = await asyncio.to_thread(_patreon_request, _patreon_sitemap_url(source.url))
-        except (HTTPError, URLError, TimeoutError, OSError) as exc:
-            logger.warning("Failed to fetch Patreon page for %s: %s", source.name, exc)
+        if _is_patreon_rss_url(source.url):
+            parsed_rss = await asyncio.to_thread(feedparser.parse, source.url)
+
+            if not parsed_rss.entries:
+                return None
+
+            entry: Any = parsed_rss.entries[0]
+            entry_id = str(
+                entry.get("id")
+                or entry.get("guid")
+                or entry.get("link")
+                or f"{entry.get('title', '')}:{entry.get('published', '')}"
+            ).strip()
+            link = str(entry.get("link") or "").strip()
+            title = str(entry.get("title") or "New update").strip()
+
+            if not entry_id:
+                return None
+
+            return {
+                "id": entry_id,
+                "link": link,
+                "title": title,
+            }
+
+        slug = await asyncio.to_thread(_patreon_extract_slug, source.url)
+        if not slug:
+            logger.warning("Could not extract creator slug from URL for %s", source.name)
             return None
 
-        latest = await asyncio.to_thread(_patreon_latest_from_html, html)
+        campaign_id = await asyncio.to_thread(_patreon_search_campaign, slug)
+        if not campaign_id:
+            logger.warning(
+                "Could not find Patreon campaign for %s (slug=%s). "
+                "Verify the URL is correct in PATREON_FEEDS_JSON.",
+                source.name,
+                slug,
+            )
+            return None
+
+        latest = await asyncio.to_thread(_patreon_api_latest_post, campaign_id)
         if latest is None:
-            logger.warning("No Patreon posts found on sitemap for %s", source.name)
+            logger.warning("No Patreon posts found via API for %s", source.name)
         return latest
 
     parsed = await asyncio.to_thread(feedparser.parse, source.url)
@@ -463,8 +495,7 @@ if CHECK_INTERVAL_MINUTES <= 0:
 
 ROYALROAD_SOURCES = _parse_sources("ROYALROAD_FEEDS_JSON", "RoyalRoad")
 PATREON_SOURCES = _parse_sources("PATREON_FEEDS_JSON", "Patreon")
-# Scheduled checks remain RoyalRoad-only for now.
-ALL_SOURCES = [*ROYALROAD_SOURCES]
+ALL_SOURCES = [*ROYALROAD_SOURCES, *PATREON_SOURCES]
 ALL_SOURCES_FOR_COMMANDS = [*ROYALROAD_SOURCES, *PATREON_SOURCES]
 
 if not ALL_SOURCES:
@@ -955,15 +986,10 @@ async def debug_latest_update(
         return
 
     if latest is None:
-        checked_url = (
-            _patreon_sitemap_url(selected_source.url)
-            if _is_patreon_platform(selected_source)
-            else selected_source.url
-        )
         await ctx.followup.send(
             (
                 f"No updates found for {selected_source.platform} / {selected_source.name}.\n"
-                f"Checked: {checked_url}"
+                f"Source URL: {selected_source.url}"
             ),
             ephemeral=True,
         )

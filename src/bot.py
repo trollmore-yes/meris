@@ -415,7 +415,15 @@ async def set_announcement_channel(ctx: discord.ApplicationContext):
     description="Story name",
     autocomplete=lambda ctx: [
         s.name
-        for s in ALL_SOURCES
+        for s in (
+            ROYALROAD_SOURCES
+            if str(ctx.options.get("platform", "")).strip().lower() == "royalroad"
+            else (
+                PATREON_SOURCES
+                if str(ctx.options.get("platform", "")).strip().lower() == "patreon"
+                else ALL_SOURCES
+            )
+        )
         if (not ctx.value or ctx.value.lower() in s.name.lower())
     ][:25],
 )
@@ -464,7 +472,15 @@ async def reannounce_last_update(
     description="Story name",
     autocomplete=lambda ctx: [
         s.name
-        for s in ALL_SOURCES
+        for s in (
+            ROYALROAD_SOURCES
+            if str(ctx.options.get("platform", "")).strip().lower() == "royalroad"
+            else (
+                PATREON_SOURCES
+                if str(ctx.options.get("platform", "")).strip().lower() == "patreon"
+                else ALL_SOURCES
+            )
+        )
         if (not ctx.value or ctx.value.lower() in s.name.lower())
     ][:25],
 )
@@ -524,7 +540,15 @@ async def set_story_roles(
     description="Story name",
     autocomplete=lambda ctx: [
         s.name
-        for s in ALL_SOURCES
+        for s in (
+            ROYALROAD_SOURCES
+            if str(ctx.options.get("platform", "")).strip().lower() == "royalroad"
+            else (
+                PATREON_SOURCES
+                if str(ctx.options.get("platform", "")).strip().lower() == "patreon"
+                else ALL_SOURCES
+            )
+        )
         if (not ctx.value or ctx.value.lower() in s.name.lower())
     ][:25],
 )
